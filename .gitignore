@@ -1,0 +1,97 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# =========================
+# IDE / OS
+# =========================
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
+
+# =========================
+# Environments
+# =========================
+.venv/
+venv/
+env/
+.env
+
+# =========================
+# Model weights
+# =========================
+pretrained_model/
+*.pth
+*.pt
+*.ckpt
+*.ckpt.*
+*.safetensors
+*.onnx
+*.bin
+
+# =========================
+# Datasets
+# =========================
+data/
+datasets/
+cfp_sample/
+ffhq_sample/
+lfw_sample/
+celeba-hq_sample/
+
+# =========================
+# Generated images
+# =========================
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.webp
+
+# =========================
+# Raw experiment outputs
+# =========================
+logs/
+res/
+res_*/
+res_source/
+cfp_runs/
+lfw_runs/
+lfw_IR152_seed4/
+ablation_ffhq_mobile_seed4/
+complexity_hca_modules/
+complexity_repeat*/
+complexity_results/
+complexity_test/
+lpips_ffhq_*/
+test_json/
+
+# =========================
+# Temporary / backup
+# =========================
+*.log
+*.tmp
+*.temp
+*.bak
+*~
+*.before_*
+*.bak_*
+
+# =========================
+# Packaging
+# =========================
+build/
+dist/
+*.egg-info/
+
+# Local experiment results
+results/
+results_adv_diffusion/
