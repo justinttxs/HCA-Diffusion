@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-set -e
+set -Eeuo pipefail
 
 PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ROOT="${PROJECT}/ablation_ffhq_mobile_seed4"
 cd "$PROJECT"
+ATTENTION_CHECKPOINT="${ATTENTION_CHECKPOINT:-pretrained_model/hca_attention.pt}"
 mkdir -p "$ROOT"
 
 run () {
@@ -16,6 +17,7 @@ run () {
     echo "======================================"
 
     python -u eval.py \
+      --attention-checkpoint "$ATTENTION_CHECKPOINT" \
       --dataset ffhq \
       --model MobileFace \
       --num 92 \

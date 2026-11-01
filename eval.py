@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torchvision.utils import save_image
 import argparse
 from torch.utils.data import Subset
-from attention_modules import SpatialMaskAttention
+from attention_modules import HCAAttentionPipeline
 # os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 seed = 0
@@ -19,6 +19,8 @@ setup_seed(0)
 
 @torch.no_grad()
 def main(args):
+
+    attention_checkpoint = HCAAttentionPipeline.load_checkpoint(args.attention_checkpoint)
 
     # set random seed
     setup_seed(args.seed)
@@ -52,7 +54,7 @@ def main(args):
 
     sampler = initialize_model('configs/stable-diffusion/v2-inpainting-inference.yaml',
                                'pretrained_model/512-inpainting-ema.ckpt')
-    model = sampler.model
+    model = sampler.model.eval()
 
     # prng = np.random.RandomState(seed)
     # start_code = prng.randn(batch_size, 4, h // 8, w // 8)
@@ -87,6 +89,11 @@ def main(args):
         for name in whitebox_names
     }
 
+    unet = model.model.diffusion_model
+    attention = HCAAttentionPipeline(unet, attention_checkpoint, classifier).to(device)
+    del attention_checkpoint
+    face_parsing = FaceParsing()
+
     # 黑盒模型输入尺寸
     if blackbox_name == 'FaceNet':
         eval_resize = nn.AdaptiveAvgPool2d((160, 160))
@@ -102,7 +109,6 @@ def main(args):
             tgt_image = tgt_image.to(device)
             B = image.shape[0]
 
-            face_parsing = FaceParsing()
             pred = face_parsing(image)
 
             image = image.to(device)
@@ -131,20 +137,11 @@ def main(args):
                     mask = get_mask(x)
             mask = (mask == 0).float().reshape(B, 1, h, w).to(device)
 
-            class ConvAttentionModule(nn.Module):
-                def __init__(self, channels=1, kernel_size=3):
-                    super().__init__()
-                    self.conv = nn.Conv2d(channels, channels, kernel_size, padding=kernel_size // 2)
-                    self.sigmoid = nn.Sigmoid()
-
-                def forward(self, mask):
-                    attn = self.sigmoid(self.conv(mask))
-                    return mask * attn
-
-            attention = ConvAttentionModule().to(device)
-            mask = attention(mask)  #
-
+            # Preserve the binary parsing support for inpainting image construction.
+            # SAMR's soft mask is used directly as the U-Net spatial condition.
             masked_image = image * (mask < 0.5)
+            mask = attention.refine_mask(mask)
+            identity = attention.target_identity(tgt_image, classifier)
 
             batch = {
                 "image": image,
@@ -159,7 +156,7 @@ def main(args):
                 cc = batch[ck].float()
                 if ck != model.masked_image_key:
                     bchw = [B, 4, h // 8, w // 8]
-                    cc = torch.nn.functional.interpolate(cc, size=bchw[-2:])
+                    cc = F.interpolate(cc, size=bchw[-2:], mode="area")
                 else:
                     cc = model.get_first_stage_encoding(model.encode_first_stage(cc.to(device)))
                 c_cat.append(cc)
@@ -180,22 +177,23 @@ def main(args):
             t = torch.tensor([_t] * B, device=device)
             z_t = model.q_sample(x_start=z, t=t)
 
-            samples_cfg, intermediates = sampler.sample(
-                ddim_steps,
-                B,
-                shape,
-                cond,
-                verbose=False,
-                eta=1.0,
-                unconditional_guidance_scale=scale,
-                unconditional_conditioning=uc_full,
-                x_T=z_t,
-                _t=_t + 1,
-                log_every_t=1,
-                classifier=classifier,
-                classifier_scale=classifier_scale,
-                x_target=tgt_image
-            )
+            with attention.denoising(unet, identity):
+                samples_cfg, intermediates = sampler.sample(
+                    ddim_steps,
+                    B,
+                    shape,
+                    cond,
+                    verbose=False,
+                    eta=1.0,
+                    unconditional_guidance_scale=scale,
+                    unconditional_conditioning=uc_full,
+                    x_T=z_t,
+                    _t=_t + 1,
+                    log_every_t=1,
+                    classifier=classifier,
+                    classifier_scale=classifier_scale,
+                    x_target=tgt_image
+                )
 
             x_samples_ddim = model.decode_first_stage(samples_cfg)
             result = torch.clamp(x_samples_ddim, min=-1, max=1)
@@ -280,13 +278,15 @@ def main(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', type=str, default='IR152')
-    parser.add_argument('--dataset', type=str, default='celeba')
+    parser.add_argument('--model', choices=['IR152', 'IRSE50', 'FaceNet', 'MobileFace'], default='IR152')
+    parser.add_argument('--dataset', choices=['celeba', 'ffhq', 'lfw', 'cfp'], default='celeba')
     parser.add_argument('--num', type=int, default='4')
     parser.add_argument('--t', type=int, default=50)
     parser.add_argument('--save', type=str, default='res')
     parser.add_argument('--s', type=int, default=300)
     parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--attention-checkpoint', default='pretrained_model/hca_attention.pt',
+                        help='Trained SAMR/LGSA/DICA weights with matching architecture config')
     args = parser.parse_args()
 
     main(args)

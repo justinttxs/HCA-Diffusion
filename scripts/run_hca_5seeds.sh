@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
+ATTENTION_CHECKPOINT="${ATTENTION_CHECKPOINT:-pretrained_model/hca_attention.pt}"
 
 # Experiment settings.
 # Supported datasets: celeba, ffhq
@@ -34,6 +35,7 @@ for SEED in "${SEEDS[@]}"; do
     echo "========================================"
 
     if ! python -u eval.py \
+        --attention-checkpoint "$ATTENTION_CHECKPOINT" \
         --model "$MODEL" \
         --dataset "$DATASET" \
         --num "$NUM" \

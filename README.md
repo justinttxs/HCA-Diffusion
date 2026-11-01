@@ -4,11 +4,19 @@ Official implementation of **HCA-Diffusion**, a diffusion-based adversarial atta
 
 HCA-Diffusion introduces a hierarchical attention design into the diffusion-based adversarial generation process. The framework contains three main components:
 
-- **SAMR**: Spatial Attention Mask Refinement
-- **LGSA**: Latent Global Self-Attention
-- **DICA**: Decoder Identity Cross-Attention
+- **SAMR (Spatial Attention Mask Refinement)** applies convolutional attention to the Face Parsing mask, providing a soft spatial condition for inpainting.
+- **LGSA (Latent Global Self-Attention)** aggregates spatial tokens at the U-Net bottleneck and adds the projected attention features back into the denoising stream to model global structure.
+- **DICA (Dynamic Identity Cross-Attention)** uses decoder features as queries and a target face identity embedding as key/value context. Its projected output is added to decoder features to provide identity conditioning during denoising.
 
-This repository contains the implementation of HCA-Diffusion together with scripts for multi-seed evaluation, hyperparameter sensitivity analysis, Adv-Diffusion baseline evaluation, and computational complexity analysis.
+This repository contains the HCA-Diffusion inference wiring together with scripts for multi-seed evaluation, hyperparameter sensitivity analysis, Adv-Diffusion baseline evaluation, and computational complexity analysis. Full HCA inference requires trained SAMR/LGSA/DICA weights and their matching configuration. These attention weights and an authoritative trained layer configuration are not distributed here; the base diffusion and face-recognition checkpoints alone are insufficient.
+
+### Generation Pipeline
+
+`eval.py` reads source/target face pairs and parses the source into semantic regions. The selected labels are skin, nose, glasses, eyes, eyebrows, mouth and lips (`1, 2, 3, 4, 5, 6, 7, 10, 11, 12`). The existing mask convention is retained: these selected regions are zero and their complement is one. The binary mask determines the masked source image; SAMR refines the complementary mask without extending its support. Area interpolation resizes the soft mask from image resolution to latent resolution (512 × 512 to 64 × 64), and the result is concatenated with the encoded masked image as the U-Net spatial condition.
+
+The source image is encoded and noised at timestep `T`. During each reverse DDIM step, LGSA updates the U-Net middle-block output before decoding. DICA updates the outputs of the decoder blocks declared by the attention checkpoint. The identity encoder is reused from the existing white-box surrogates, with the same image normalization and pooling convention as classifier guidance; its normalized target embedding supplies one identity token. The held-out recognition model is used only for evaluation. Both internally concatenated classifier-free guidance batches receive the matching identity context, including with the existing text guidance scale of zero.
+
+The original cosine-similarity classifier guidance, latent sampling and image decoding remain in use. Generated images and ASR results are saved under `--save`. `eval_source.py` runs the independent Adv-Diffusion baseline without loading or installing HCA attention. The integration reuses the existing attention equations and adds no training procedure. With a single identity token, DICA's softmax has one key, so spatially varying identity attention must not be inferred from this implementation.
 
 ---
 
@@ -78,6 +86,7 @@ pretrained_model/
 ├── mobile_face.pth
 ├── facenet.pth
 ├── 38_G.pth
+├── hca_attention.pt          # required separately for full HCA inference
 └── open_clip/
     └── open_clip_pytorch_model.bin
 ```
@@ -124,6 +133,32 @@ The OpenCLIP checkpoint should be placed at:
 pretrained_model/open_clip/open_clip_pytorch_model.bin
 ```
 
+### HCA Attention Checkpoint
+
+`eval.py` requires `pretrained_model/hca_attention.pt`, or a path supplied with `--attention-checkpoint`. It stops if this file is absent; there is no random-weight or zero-output fallback. A compatible checkpoint must contain trained weights for the exact residual integration described above. Renaming a base Stable Diffusion checkpoint or saving newly initialized attention modules does not satisfy this requirement.
+
+The loader accepts a tensor/primitive dictionary with this interface:
+
+```text
+format_version: 1
+config:
+  identity_encoder: name of an available white-box FR model
+  identity_dim: output embedding width of that encoder
+  samr_kernel_size: positive odd convolution kernel size
+  lgsa_heads: head count dividing the U-Net bottleneck width
+  dica_blocks: nonempty list of distinct U-Net output_blocks indices
+  dica_heads: positive cross-attention head count
+  dica_dim_head: positive cross-attention head width
+state_dict:
+  samr.*: SpatialMaskAttention parameters
+  lgsa.*: LatentGlobalAttention parameters
+  dicas.<block_index>.*: IdentityCrossAttention parameters for each selected block
+```
+
+This is the inference loader's compatibility contract, not a supplied trained artifact or a claim about unpublished paper settings. Bottleneck/decoder channel widths are taken from the loaded U-Net; identity context width and head counts come from the checkpoint configuration. Every attention parameter is loaded strictly before use. The declared identity encoder must remain a surrogate for the selected `--model`; checkpoints for different held-out settings may therefore require different encoder configurations and matching weights. Existing attention weights in a different naming format must be mapped explicitly after confirming architecture and residual semantics.
+
+The two HCA shell scripts accept `ATTENTION_CHECKPOINT` to select this artifact. Keep the checkpoint and configuration fixed across seeds and sensitivity runs. The attention checkpoint, like all other model weights, is excluded from Git.
+
 ---
 
 ## 4. Dataset Preparation
@@ -167,7 +202,7 @@ Dataset files are not distributed with this repository.
 
 ## 5. Running HCA-Diffusion
 
-A single HCA-Diffusion experiment can be launched with:
+After providing a compatible trained attention checkpoint, a single HCA-Diffusion experiment can be launched with:
 
 ```bash
 python eval.py \
@@ -191,6 +226,7 @@ The main command-line arguments are:
 | `--s` | Classifier guidance strength |
 | `--seed` | Random seed |
 | `--save` | Output directory |
+| `--attention-checkpoint` | Trained attention checkpoint and matching configuration (HCA only) |
 
 The main experimental configuration uses:
 
@@ -352,7 +388,7 @@ s = 300
 
 ## 10. Computational Complexity
 
-The computational overhead of the hierarchical attention components can be evaluated using:
+The existing complexity-only attention harness can be run using:
 
 ```bash
 python benchmark_hca_modules.py \
@@ -386,10 +422,10 @@ full
 where:
 
 - `baseline` evaluates the diffusion pipeline without the three HCA attention components.
-- `samr` enables SAMR.
-- `lgsa` enables LGSA.
-- `dica` enables DICA.
-- `full` enables the complete hierarchical attention configuration.
+- `samr` executes the SAMR computation.
+- `lgsa` executes a bottleneck LGSA hook.
+- `dica` executes DICA hooks on selected decoder blocks.
+- `full` executes all three attention computations.
 
 The complexity script is intended to measure computational properties such as:
 
@@ -398,7 +434,7 @@ The complexity script is intended to measure computational properties such as:
 - additional parameters
 - FLOPs
 
-The LGSA and DICA integrations in this script are used for computational complexity measurement.
+This harness uses temporary, untrained modules: LGSA/DICA output projections are zero-initialized and SAMR's output is excluded from the mask update. It does not load the trained HCA attention checkpoint and does not validate attack effectiveness. Its measurements describe the configured benchmark wiring, which may differ from the decoder blocks or head dimensions of a trained HCA checkpoint. Use `eval.py` for checkpoint-backed HCA generation.
 
 ---
 
