@@ -8,7 +8,7 @@ HCA-Diffusion introduces a hierarchical attention design into the diffusion-base
 - **LGSA (Latent Global Self-Attention)** aggregates spatial tokens at the U-Net bottleneck and adds the projected attention features back into the denoising stream to model global structure.
 - **DICA (Dynamic Identity Cross-Attention)** uses decoder features as queries and a target face identity embedding as key/value context. Its projected output is added to decoder features to provide identity conditioning during denoising.
 
-This repository contains the HCA-Diffusion inference wiring together with scripts for multi-seed evaluation, hyperparameter sensitivity analysis, Adv-Diffusion baseline evaluation, and computational complexity analysis. Full HCA inference requires trained SAMR/LGSA/DICA weights and their matching configuration. These attention weights and an authoritative trained layer configuration are not distributed here; the base diffusion and face-recognition checkpoints alone are insufficient.
+This repository contains the HCA-Diffusion inference wiring together with scripts for multi-seed evaluation, hyperparameter sensitivity analysis, Adv-Diffusion baseline evaluation, and computational complexity analysis. Full HCA inference requires trained SAMR/LGSA/DICA weights and their matching configuration.
 
 ### Generation Pipeline
 
@@ -32,7 +32,7 @@ Create the Conda environment using:
 
 ```bash
 conda env create -f env.yaml
-conda activate hca-diffusion
+conda activate hca-diff
 ```
 
 ---
